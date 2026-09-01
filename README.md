@@ -12,9 +12,8 @@ MQTT 全面走 **TLS**（8883），明碼 1883 已經關閉，細節見下方「
 ```text
 ESP32 (SMART-LOCK-V1 / SMART-STRONGBOX-V1)     Docker Compose
         │  WiFi + MQTT (TLS)                    ├─ mqtt_service      (eclipse-mosquitto, TLS:8883, 9001)
-        └──────────────────┬────────────────────┼─ mqtt_server       (Python, mqtt-server/)
-                            │                    │    ├─ 註冊/指令/OTA 韌體伺服器 (8080)
-                            │                    │    └─ 網頁監控 web_monitor.py (8090)
+        └──────────────────┬────────────────────┼─ mqtt_server       (Python, 註冊/指令/OTA 韌體伺服器 8080)
+                            │                    ├─ mqtt_monitor      (同 image，web_monitor.py, 8090)
                             │                    ├─ node_red          (1880)
                             │                    ├─ mysql             (devicemanagement, 3306)
                             │                    ├─ api               (家庭/裝置管理 CGI 閘道, 8091)
@@ -71,11 +70,9 @@ cd config/certs
 
 `mqtt-server/web_monitor.py` 提供即時裝置狀態 / 事件記錄的網頁介面，開發機瀏覽器打開 `http://<host>:8090` 即可看到裝置列表、上鎖/解鎖按鈕、門鈴與防拆事件紀錄。
 
-目前尚未納入容器的常駐啟動流程，需要時手動啟動：
+已經是 `docker compose up -d` 會一起帶起來的常駐服務（`mqtt-monitor` 容器，跟 `mqtt-server` 共用同一個 image，只是 `command` 換成跑 `web_monitor.py`）。
 
-```bash
-docker exec -d mqtt_server python -u web_monitor.py
-```
+> 以前的做法是 `docker exec -d mqtt_server python -u web_monitor.py`，**不要再這樣用**——`exec` 起的程序不是容器主程序，`mqtt-server` 一 restart（例如改完 `models.yaml` 重載）就會被殺掉，監控頁面就打不開了。
 
 ## OTA 更新（含簽章驗證）
 
@@ -97,8 +94,9 @@ docker exec mqtt_server python test_ota.py <mac> <檔名.bin> <版本號>
 ## Arduino 端
 
 - Sketch：`Arduino/MqttSmartLock/MqttSmartLock.ino`（repo 版的 WiFi 帳密是佔位字串，**帳密不要 commit**）
-- 板子：ESP32 Dev Module，序列埠 115200
-- 需要安裝：**PubSubClient 2.8** + **Crypto**（Rhys Weatherley，`Ed25519.h`，OTA 簽章驗證用）；`HTTPClient`/`Update`/`mbedtls`/`WiFiClientSecure` 是 ESP32 core 內建
+- 板子：ESP32-S3 N16R8 → IDE 選「ESP32S3 Dev Module」（Flash 16MB、PSRAM 選 OPI），序列埠 115200
+- 開門機構：servo 接 GPIO18（鎖上 0° / 開鎖 90°，電源 5V 共地）；門鈴/防拆觸控腳在 GPIO7/GPIO9（S3 觸控腳只有 GPIO1~14，跟傳統 ESP32 不同）
+- 需要安裝：**PubSubClient 2.8** + **Crypto**（Rhys Weatherley，`Ed25519.h`，OTA 簽章驗證用）+ **ESP32Servo**（Kevin Harrington）；`HTTPClient`/`Update`/`mbedtls`/`WiFiClientSecure` 是 ESP32 core 內建
 - MQTT 連線用 `WiFiClientSecure`（TLS），OTA 韌體下載仍是明碼 HTTP（兩者是分開的傳輸層，OTA 靠簽章驗證把關，見上方「OTA 更新」）
 
 ## 常用測試指令
@@ -156,7 +154,7 @@ docker exec mqtt_server python test_ota.py        # 觸發 OTA
 ## 檔案地圖
 
 ```text
-docker-compose.yml        # mqtt-broker / mqtt-server / node-red / mysql / api / api-mqtt-bridge
+docker-compose.yml        # mqtt-broker / mqtt-server / mqtt-monitor / node-red / mysql / api / api-mqtt-bridge
 config/mosquitto.conf     # broker 設定（TLS-only，8883）
 config/certs/             # generate_certs.sh + CA/server 憑證（私鑰不進版控）
 mqtt-server/

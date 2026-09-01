@@ -23,8 +23,11 @@
 
 - **PubSubClient**（by Nick O'Leary）
 - **Crypto**（by Rhys Weatherley）— 提供 `Ed25519.h`，OTA 簽章驗證用
+- **ESP32Servo**（by Kevin Harrington）— 開門 servo 用，S3 上不能用內建 Servo.h
 
 `HTTPClient.h`、`Update.h`、`mbedtls/sha256.h` 是 ESP32 core 內建的，不用另外裝。
+
+板子設定（ESP32-S3 N16R8）：開發板選「**ESP32S3 Dev Module**」，Flash Size **16MB**、PSRAM「**OPI PSRAM**」；Partition Scheme 要選**有兩個 OTA 分區**的（預設 Default 即可）——選到沒有 OTA 分區的 scheme 時 `Update.begin()` 會直接失敗。
 
 ### 2. 產生簽章金鑰對
 

@@ -1,5 +1,6 @@
 /*
  * SMART-LOCK-V1 測試韌體 — 對接 mqtt-server
+ * 目標板：ESP32-S3 N16R8（16MB Flash / 8MB Octal PSRAM）
  *
  * 流程：
  *   1. 連 WiFi → 連 MQTT broker
@@ -9,11 +10,22 @@
  *   5. 回報 home/device/<mac>/state {"locked": bool}
  *   6. 觸控腳觸發 home/device/<mac>/event（doorbell / tamper_detected）
  *
- * 硬體（測試用，不需外接零件）：
+ * 硬體（ESP32-S3）：
+ *   GPIO18 = 開門 servo 訊號線（鎖上 0° / 開鎖 90°；servo 電源接 5V，地要跟板子共地）
  *   GPIO2  = 狀態燈（開鎖時亮）
- *   GPIO15 = relay 替代 LED（開鎖時亮）
- *   GPIO27 = 門鈴觸控腳（T7，手指碰觸即觸發）
- *   GPIO32 = 防拆觸控腳（T9）
+ *   GPIO7  = 門鈴觸控腳（T7，手指碰觸即觸發）
+ *   GPIO9  = 防拆觸控腳（T9）
+ *
+ * S3 腳位注意（跟傳統 ESP32 不同，換板子最容易踩的雷）：
+ *   - 觸控腳只有 GPIO1~GPIO14（T1~T14），舊版用的 GPIO27/GPIO32 在 S3 上不能用
+ *   - N16R8 的 GPIO26~32 給 flash、GPIO33~37 給 Octal PSRAM，一律不要接東西
+ *   - GPIO0/3/45/46 是 strapping 腳、GPIO19/20 是 USB、GPIO43/44 是 UART0，盡量避開
+ *   - S3 的 touchRead() 數值是「碰到會變大」（傳統 ESP32 是變小），
+ *     下面的 isTouched() 判斷偏離基準值（雙向），兩種板子都通用
+ *
+ * Arduino IDE 設定（工具選單）：
+ *   開發板「ESP32S3 Dev Module」、Flash Size「16MB」、PSRAM「OPI PSRAM」，
+ *   Partition Scheme 選有兩個 OTA 分區的（預設 Default 即可，OTA 需要）
  *
  * MQTT 連線走 TLS（8883），broker 只認得帶正確 CA 簽的連線，明碼 1883 已經關掉。
  * ESP32 沒有內建正確的即時時間，TLS 驗證憑證效期需要，所以開機時會先跟 NTP 對時。
@@ -21,6 +33,7 @@
  * 需要安裝程式庫：
  *   - PubSubClient（by Nick O'Leary，程式庫管理員搜尋即可）
  *   - Crypto（by Rhys Weatherley，提供 Ed25519.h，OTA 簽章驗證用）
+ *   - ESP32Servo（by Kevin Harrington/John K. Bennett，S3 上內建 Servo.h 不能用）
  * HTTPClient / Update / mbedtls / WiFiClientSecure 都是 ESP32 core 內建，不用額外裝。
  */
 #include <WiFi.h>
@@ -29,6 +42,7 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include <Ed25519.h>
+#include <ESP32Servo.h>
 #include "mbedtls/sha256.h"
 #include <time.h>
 
@@ -70,24 +84,72 @@ const uint8_t OTA_PUBLIC_KEY[32] = { 0x3e, 0xce, 0x9b, 0xb3, 0x24, 0xd5, 0x3b, 0
 #define MODEL "SMART-LOCK-V1"
 #define FW_VERSION "1.0.0"  // 每次燒錄新版本記得改，OTA 後可從序列埠確認是否真的更新成功
 
-// 腳位（測試板：relay 用 LED 代替，按鈕用觸控腳代替）
-#define PIN_RELAY_LED   15  // relay 替代 LED
+// 腳位（ESP32-S3：開門機構用 servo，按鈕用觸控腳代替）
+#define PIN_SERVO       18  // servo 訊號線
 #define PIN_STATUS_LED  2   // 狀態燈
-#define TOUCH_DOORBELL  T7  // GPIO27
-#define TOUCH_TAMPER    T9  // GPIO32
+#define TOUCH_DOORBELL  T7  // GPIO7（S3 觸控腳 = GPIO1~14）
+#define TOUCH_TAMPER    T9  // GPIO9
+
+// servo 角度：0° = 鎖上、90° = 開鎖
+#define SERVO_ANGLE_LOCKED    0
+#define SERVO_ANGLE_UNLOCKED  90
+
+Servo lockServo;
+
 // 觸摸判定：開機時取樣當基準值，讀值偏離基準 1/3 以上視為觸摸
-// （不同 core 版本數值範圍差很大：舊 core 沒碰約 60~80 碰到會變小；core 3.x 是大數值）
+// （不同板子/核心方向不同：傳統 ESP32 碰到變小、S3 碰到變大，雙向判斷都涵蓋）
 uint32_t doorbellBase = 0, tamperBase = 0;
 
+// 某支腳持續被判定為「觸摸」超過這個時間，代表基準值抓錯了（真人不會摸著不放這麼久），
+// 自動重新校準，避免一路狂送假的 doorbell/tamper 事件把 server 洗版
+#define TOUCH_STUCK_MS 10000
+
+// S3 的觸控週邊剛初始化時會先回傳未校準的巨大數值（實測開機瞬間讀到 28 萬、
+// 穩定後才降到 2.6 萬），開機立刻取樣會把垃圾值當成基準，之後每次讀值都「偏離基準」
+// 而被誤判成一直有人在摸。所以先空轉丟掉暖機期的讀值，再取樣到數值穩定為止。
 uint32_t touchBaseline(uint8_t pin) {
-  uint32_t sum = 0;
-  for (int i = 0; i < 16; i++) { sum += touchRead(pin); delay(10); }
-  return sum / 16;
+  unsigned long t0 = millis();
+  while (millis() - t0 < 1200) { touchRead(pin); delay(20); }  // 暖機，讀值丟掉不用
+
+  uint32_t avg = 0;
+  for (int attempt = 0; attempt < 10; attempt++) {
+    uint32_t sum = 0, lo = UINT32_MAX, hi = 0;
+    for (int i = 0; i < 16; i++) {
+      uint32_t v = touchRead(pin);
+      sum += v;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+      delay(10);
+    }
+    avg = sum / 16;
+    if (avg > 0 && (hi - lo) < avg / 10) return avg;  // 16 次讀值波動在 10% 以內才算穩定
+  }
+  Serial.println("[TOUCH] 警告：讀值一直不穩定，先用最後一次平均值當基準");
+  return avg;
 }
 
 bool isTouched(uint8_t pin, uint32_t base) {
   uint32_t v = touchRead(pin);
   return v < base - base / 3 || v > base + base / 3;
+}
+
+// 判定觸摸，並處理「基準值抓錯導致一直觸發」的情況：持續觸發超過 TOUCH_STUCK_MS
+// 就重新校準而不是繼續送事件
+bool touchActive(uint8_t pin, uint32_t& base, unsigned long& stuckSince, const char* name) {
+  if (!isTouched(pin, base)) {
+    stuckSince = 0;
+    return false;
+  }
+  if (stuckSince == 0) stuckSince = millis();
+  if (millis() - stuckSince > TOUCH_STUCK_MS) {
+    Serial.println("[TOUCH] " + String(name) + " 持續觸發超過 " + String(TOUCH_STUCK_MS / 1000) +
+                   " 秒，判定基準值不對，重新校準（現在不要碰腳位）");
+    base = touchBaseline(pin);
+    Serial.println("[TOUCH] " + String(name) + " 新基準值 = " + String(base));
+    stuckSince = 0;
+    return false;
+  }
+  return true;
 }
 
 // TLS 驗證憑證效期需要正確的即時時間，ESP32 開機預設是 1970，要先跟 NTP 對時。
@@ -124,7 +186,7 @@ bool registered = false;     // 本次開機是否已送過 register，斷線重
 // ---------- 狀態控制 ----------
 void applyLockState(bool newLocked) {
   locked = newLocked;
-  digitalWrite(PIN_RELAY_LED, locked ? LOW : HIGH);
+  lockServo.write(locked ? SERVO_ANGLE_LOCKED : SERVO_ANGLE_UNLOCKED);
   digitalWrite(PIN_STATUS_LED, locked ? LOW : HIGH);
   if (!locked) unlockAt = millis();
 
@@ -323,10 +385,13 @@ void connectMqtt() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(PIN_RELAY_LED, OUTPUT);
   pinMode(PIN_STATUS_LED, OUTPUT);
-  digitalWrite(PIN_RELAY_LED, LOW);
   digitalWrite(PIN_STATUS_LED, LOW);
+
+  // servo：50Hz、SG90 常見脈寬 500~2400us；開機先轉到鎖上位置
+  lockServo.setPeriodHertz(50);
+  lockServo.attach(PIN_SERVO, 500, 2400);
+  lockServo.write(SERVO_ANGLE_LOCKED);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -348,11 +413,12 @@ void setup() {
   topicEvent  = "home/device/" + macAddr + "/event";
   topicOta    = "home/device/" + macAddr + "/ota";
 
-  // 觸控腳校準（此時不要碰 GPIO27 / GPIO32）
+  // 觸控腳校準（含暖機，約需 3~5 秒，這段期間不要碰 GPIO7 / GPIO9）
+  Serial.println("[TOUCH] 校準中，請不要碰觸腳位...");
   doorbellBase = touchBaseline(TOUCH_DOORBELL);
   tamperBase   = touchBaseline(TOUCH_TAMPER);
-  Serial.println("[TOUCH] 基準值 doorbell(GPIO27)=" + String(doorbellBase) +
-                 "  tamper(GPIO32)=" + String(tamperBase));
+  Serial.println("[TOUCH] 基準值 doorbell(GPIO7)=" + String(doorbellBase) +
+                 "  tamper(GPIO9)=" + String(tamperBase));
 
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
@@ -369,16 +435,18 @@ void loop() {
     applyLockState(true);
   }
 
-  // 門鈴：觸摸 GPIO27（T7），500ms 冷卻避免連發
-  static unsigned long lastDoorbell = 0;
-  if (isTouched(TOUCH_DOORBELL, doorbellBase) && millis() - lastDoorbell > 500) {
+  // 門鈴：觸摸 GPIO7（T7），500ms 冷卻避免連發
+  static unsigned long lastDoorbell = 0, doorbellStuck = 0;
+  if (touchActive(TOUCH_DOORBELL, doorbellBase, doorbellStuck, "doorbell") &&
+      millis() - lastDoorbell > 500) {
     lastDoorbell = millis();
     publishEvent("doorbell");
   }
 
-  // 防拆：觸摸 GPIO32（T9），2 秒冷卻
-  static unsigned long lastTamper = 0;
-  if (isTouched(TOUCH_TAMPER, tamperBase) && millis() - lastTamper > 2000) {
+  // 防拆：觸摸 GPIO9（T9），2 秒冷卻
+  static unsigned long lastTamper = 0, tamperStuck = 0;
+  if (touchActive(TOUCH_TAMPER, tamperBase, tamperStuck, "tamper") &&
+      millis() - lastTamper > 2000) {
     lastTamper = millis();
     publishEvent("tamper_detected");
   }

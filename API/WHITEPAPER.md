@@ -78,7 +78,7 @@
                                                               └───────────┘
 ```
 
-`docker-compose.yml` 定義的服務：`mqtt-broker`、`mqtt-server`（既有的 OTA/裝置註冊服務）、`node-red`、`mysql`（新增）、`api`（新增，跑 `gateway.py`）、`api-mqtt-bridge`（新增，跑 `mqtt_topic_bridge.py`，同一個 image 換 `command`）。
+`docker-compose.yml` 定義的服務：`mqtt-broker`、`mqtt-server`（既有的 OTA/裝置註冊服務）、`mqtt-monitor`（網頁監控）、`node-red`、`mysql`（新增）、`api`（新增，跑 `gateway.py`）、`api-mqtt-bridge`（新增，跑 `mqtt_topic_bridge.py`，同一個 image 換 `command`）。
 
 ## 4. 資料模型
 

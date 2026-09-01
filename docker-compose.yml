@@ -27,9 +27,31 @@ services:
       - MQTT_CA_CERT=/certs/ca.crt
     ports:
       - "8080:8080"   # OTA 韌體檔案下載（/firmware/<file>.bin）
-      - "8090:8090"   # 網頁監控 web_monitor.py
     volumes:
       - ./mqtt-server:/app   # 掛整個目錄：改 code 後 restart 生效，devices.json 保留在本機
+      - ./config/certs:/certs:ro
+    depends_on:
+      - mqtt-broker
+    networks:
+      - mqtt-net
+
+  # 網頁監控（web_monitor.py）跟 mqtt-server 同一個 image、只是換 command。
+  # 拆成獨立服務而不是用 docker exec 另外跑，是因為 exec 起的程序不是容器主程序，
+  # mqtt-server 一 restart 就會被殺掉，監控頁面就打不開了。
+  mqtt-monitor:
+    build: ./mqtt-server
+    container_name: mqtt_monitor
+    restart: always
+    command: ["python", "-u", "web_monitor.py"]
+    environment:
+      - MQTT_BROKER=mqtt-broker
+      - MQTT_PORT=8883
+      - MQTT_USE_TLS=1
+      - MQTT_CA_CERT=/certs/ca.crt
+    ports:
+      - "8090:8090"   # 網頁監控頁面
+    volumes:
+      - ./mqtt-server:/app
       - ./config/certs:/certs:ro
     depends_on:
       - mqtt-broker

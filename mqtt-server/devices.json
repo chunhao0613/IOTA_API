@@ -18,5 +18,10 @@
     "model": "SMART-LOCK-V1",
     "last_seen": 1784638372.9022877,
     "online": true
+  },
+  "28:84:85:5C:A2:E4": {
+    "model": "SMART-LOCK-V1",
+    "last_seen": 1788178464.841825,
+    "online": true
   }
 }

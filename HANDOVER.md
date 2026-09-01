@@ -52,29 +52,37 @@ docker logs -f mqtt_server        # 應印出「Broker 連線成功」
 ## Arduino 端
 
 - Sketch：`Arduino/MqttSmartLock/MqttSmartLock.ino`（repo 版的 WiFi 帳密是佔位字串，**帳密不要 commit**）
-- 程式庫：**PubSubClient 2.8**（knolleary）+ **Crypto**（Rhys Weatherley，提供 `Ed25519.h`，OTA 簽章驗證用），IDE 程式庫管理員搜尋安裝即可；`HTTPClient.h`/`Update.h`/`mbedtls/sha256.h`/`WiFiClientSecure.h` 是 ESP32 core 內建，不用額外安裝
+- 程式庫：**PubSubClient 2.8**（knolleary）+ **Crypto**（Rhys Weatherley，提供 `Ed25519.h`，OTA 簽章驗證用）+ **ESP32Servo**（Kevin Harrington，S3 上不能用內建 Servo.h），IDE 程式庫管理員搜尋安裝即可；`HTTPClient.h`/`Update.h`/`mbedtls/sha256.h`/`WiFiClientSecure.h` 是 ESP32 core 內建，不用額外安裝
 - MQTT 用 `WiFiClientSecure`（TLS，8883），OTA 韌體下載維持明碼 HTTP（兩條分開的傳輸層）
-- 板子：ESP32 Dev Module，序列埠 115200
-- 測試板腳位（relay 用 LED 代替、按鈕用觸控腳代替）：
+- 板子：**ESP32-S3 N16R8** → IDE 選「ESP32S3 Dev Module」，Flash Size 16MB、PSRAM「OPI PSRAM」、Partition Scheme 選有兩個 OTA 分區的（預設即可），序列埠 115200
+- 腳位（開門機構用 servo 0°~90°、按鈕用觸控腳代替）：
 
 | 腳位 | 功能 |
 |---|---|
+| GPIO18 | 開門 servo 訊號線（鎖上 0° / 開鎖 90°；servo 吃 5V，要跟板子共地） |
 | GPIO2 | 狀態燈（開鎖亮） |
-| GPIO15 | relay 替代 LED（開鎖亮） |
-| GPIO27 (T7) | 門鈴觸控 |
-| GPIO32 (T9) | 防拆觸控 |
+| GPIO7 (T7) | 門鈴觸控 |
+| GPIO9 (T9) | 防拆觸控 |
 
-（models.yaml 定義的正式腳位是 relay=26 / doorbell=27 / tamper=25，正式硬體時要改回）
+**S3 腳位地雷**（從傳統 ESP32 換過來最容易踩）：觸控腳只有 GPIO1~14；N16R8 的 GPIO26~32 給 flash、GPIO33~37 給 Octal PSRAM 一律不能接；GPIO0/3/45/46 是 strapping、19/20 是 USB、43/44 是 UART0。舊 sketch 的 GPIO27/GPIO32 觸控腳在 S3 上不存在/不能用，已搬到 GPIO7/GPIO9。（models.yaml 定義的腳位是照傳統 ESP32 寫的，之後要讓韌體改讀 config 回傳的 `pins` 時記得一併更新成 S3 腳位）
 
-### 觸控除錯（目前卡住的點）
+### 觸控除錯
 
-觸摸判定 = 讀值偏離開機基準值 1/3 以上（`isTouched()`），適配新舊 ESP32 core 的不同數值範圍。燒錄後看序列埠：
+觸摸判定 = 讀值偏離開機基準值 1/3 以上（`isTouched()`），適配新舊 ESP32 core 的不同數值範圍。
 
-1. 開機印 `[TOUCH] 基準值 doorbell(GPIO27)=xx tamper(GPIO32)=yy`（開機頭幾秒不要碰腳位）
-2. 每 2 秒印目前讀值；手指摸**金屬針腳**觀察是否偏離基準
-3. 有偏離但不觸發 → 把 `isTouched()` 的 `base / 3` 改 `base / 4`（更靈敏）
-4. 讀值完全不動 → 手指沒接觸到金屬，插一條杜邦線到腳位、摸金屬頭
-5. 確認 OK 後可刪掉 loop 裡的 `[TOUCH]` debug 輸出區塊
+**⚠️ 換到 S3 後踩過的坑（已修）**：S3 的觸控週邊剛初始化時會回傳未校準的巨大數值——實測開機瞬間讀到 `285402`，硬體穩定後真值只有 `26734`。舊版 `touchBaseline()` 開機後只等 160ms 就取樣，把垃圾值當成基準，導致之後每次讀值都「偏離基準 90%」被判成一直有人在摸，**狂送假的 doorbell/tamper 事件洗版**（一次就往 `audit_logs` 灌了 600 多筆假紀錄）。修法有兩層：
+
+- `touchBaseline()` 先空轉 1.2 秒丟掉暖機期讀值，再取樣到 16 次波動 <10% 才採用（最多重試 10 輪）
+- `touchActive()` 加保險：同一支腳持續觸發超過 10 秒就自動重新校準（真人不會摸著不放這麼久），基準值萬一還是抓錯也不會無限洗版
+
+燒錄後看序列埠：
+
+1. 開機先印 `[TOUCH] 校準中，請不要碰觸腳位...`，**這 3~5 秒不要碰 GPIO7/GPIO9**，接著印 `[TOUCH] 基準值 doorbell(GPIO7)=xx tamper(GPIO9)=yy`
+2. 基準值要跟後面每 2 秒印的讀值「同一個數量級」——差 10 倍代表暖機還不夠，把 `touchBaseline()` 的 1200ms 再加大
+3. 手指摸**金屬針腳**觀察讀值是否偏離基準（S3 是碰到「變大」，跟傳統 ESP32 相反，但雙向判斷都涵蓋）
+4. 有偏離但不觸發 → 把 `isTouched()` 的 `base / 3` 改 `base / 4`（更靈敏）
+5. 讀值完全不動 → 手指沒接觸到金屬，插一條杜邦線到腳位、摸金屬頭
+6. 確認 OK 後可刪掉 loop 裡的 `[TOUCH]` debug 輸出區塊
 
 ## MQTT TLS 加密（新加，Python/CLI 端已驗證，Arduino 端還沒真機測過）
 
@@ -149,7 +157,7 @@ docker compose restart mqtt-server
 ## 檔案地圖
 
 ```
-docker-compose.yml        # mqtt-broker / mqtt-server / node-red / mysql / api / api-mqtt-bridge
+docker-compose.yml        # mqtt-broker / mqtt-server / mqtt-monitor / node-red / mysql / api / api-mqtt-bridge
 config/mosquitto.conf     # broker 設定（TLS-only 8883、允許匿名、persistence）
 config/certs/             # generate_certs.sh + CA/server 憑證（私鑰不進版控）
 mqtt-server/
@@ -182,12 +190,12 @@ API/                      # 家庭/裝置管理 CGI 後端，見「API 整合」
 
 ## 待辦
 
-1. 驗證觸控腳 doorbell / tamper 事件（燒錄新版 sketch → 摸腳位 → 看 server log）
+1. 驗證觸控腳 doorbell / tamper 事件（燒錄新版 sketch → 摸腳位 → 看 server log）。假事件洗版的根因已找到並修掉（S3 觸控暖機，見上方「觸控除錯」），但**修完還沒真機驗證**；另外 `audit_logs` 裡有 614 筆當時灌進去的假 `DEVICE_EVENT`（device_id `28:84:85:5C:A2:E4`、family_id 為 NULL），要不要清掉還沒決定——那張表是雜湊鏈，刪列會斷鏈
 2. **OTA（含簽章驗證）尚未在實體 ESP32 上跑過**：簽章的產生/驗證邏輯已經在 server 端用假韌體交叉驗證過（正常簽章通過、竄改內容會正確被拒絕），但 Arduino 端「邊下載邊算 SHA-256 邊寫入 OTA 分區」這段從沒真機測過，需要實際燒錄驗證：正常簽章能更新成功、竄改過的 `.bin` 或漏簽的韌體會被裝置端拒絕且不會變磚。新增的 `POST /ota_update` 端點也還沒實機測過（Admin 權限檢查 → MQTT 發布這段目前只確認過程式邏輯沒有語法/連線錯誤）
 3. `ota_update.py` 不檢查 `firmware_file` 是否真的存在於 `mqtt-server/firmware/`、也不比對版本，打錯檔名或忘記簽章要等裝置端下載/驗證失敗才會發現，之後可以考慮讓 `mqtt-server` 開一支清單/校驗端點供 `ota_update.py` 呼叫
 4. handlers 的 TODO：doorbell 推播通知（Telegram / ntfy）、tamper 緊急警報
 5. Node-RED flow 接上 `home/#` 主題做視覺化（node_red 容器已在 compose 裡）
-6. 正式硬體：relay 改回 GPIO26、實體按鈕取代觸控腳，讓韌體改讀 config 回傳的 `pins` 而不是寫死
+6. 正式硬體：開門機構已改用 servo（GPIO18，0°~90°）並換板 ESP32-S3 N16R8，尚未真機驗證 servo 動作；實體按鈕取代觸控腳、讓韌體改讀 config 回傳的 `pins` 而不是寫死（models.yaml 的腳位定義也還是傳統 ESP32 的，要一併更新）
 7. `API/` 沒有「建立家庭」的 endpoint，目前得手動 `INSERT INTO families`，之後要補一支
 8. `docker-compose.yml` 裡 MySQL 的帳密（`devroot123`/`devpass123`）是本機開發用預設值，正式環境要換成真的密碼並考慮不要 commit 進 repo
 9. `control_device.py` 走 `mqtt` 模式目前只支援 `LOCK`/`UNLOCK`，其餘動作韌體不支援，橋接會直接丟棄

@@ -1,9 +1,13 @@
+# 腳位是 ESP32-S3 N16R8 的配置（韌體目前寫死在 sketch 裡，這裡先對齊，
+# 之後韌體改讀 config 的 pins 時才不會拿到錯的腳位）。
+# S3 注意：GPIO26~32 給 flash、GPIO33~37 給 Octal PSRAM，不能拿來接東西；
+# 觸控腳只有 GPIO1~14。
 SMART-LOCK-V1:
   features: [lock, doorbell, tamper_detect]
   pins:
-    relay: 26
-    doorbell: 27
-    tamper: 25
+    servo: 18
+    doorbell: 7
+    tamper: 9
     status_led: 2
   default_state: locked
   auto_lock_sec: 5
