@@ -23,5 +23,10 @@
     "model": "SMART-LOCK-V1",
     "last_seen": 1788178464.841825,
     "online": true
+  },
+  "DEMO:00:00:00:01": {
+    "model": "SMART-LOCK-V1",
+    "last_seen": 1789541981.5681012,
+    "online": true
   }
 }
