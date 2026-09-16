@@ -5,6 +5,7 @@ import '../theme/app_theme.dart';
 import '../utils/api_client.dart';
 import '../utils/api_config.dart';
 import '../utils/app_feedback.dart';
+import '../utils/device_models.dart';
 import '../utils/parsing.dart';
 
 /// Admin 專屬的裝置管理對話框：維修模式（UC5.1）、韌體更新（UC2.2）、
@@ -342,7 +343,7 @@ class DeviceAdminDialogs {
     final idController = TextEditingController();
     final nameController = TextEditingController(text: '大門智慧鎖');
     final formKey = GlobalKey<FormState>();
-    var deviceType = 'smart_lock';
+    var deviceType = kDeviceModels.first.id;
 
     try {
       final confirmed = await showDialog<bool>(
@@ -384,25 +385,52 @@ class DeviceAdminDialogs {
                           : null,
                     ),
                     const SizedBox(height: AppSpacing.md),
+                    // 選項來自 mqtt-server/models.yaml（見 device_models.dart）。
+                    // 舊版寫死 smart_lock / sensor / camera，後兩者在整套系統
+                    // 裡不存在——沒有型號定義、沒有韌體、沒有 handler——選了
+                    // 會配對出一台永遠不會回應的裝置。
                     DropdownButtonFormField<String>(
                       initialValue: deviceType,
                       dropdownColor: AppColors.surface,
                       style: const TextStyle(color: AppColors.textPrimary),
-                      decoration: _fieldDecoration('裝置類型', ''),
-                      items: const [
-                        DropdownMenuItem(
-                            value: 'smart_lock', child: Text('智慧電子鎖')),
-                        DropdownMenuItem(
-                            value: 'sensor', child: Text('溫濕度感測器')),
-                        DropdownMenuItem(
-                            value: 'camera', child: Text('智慧攝影機')),
-                      ],
+                      decoration: _fieldDecoration('裝置型號', ''),
+                      items: kDeviceModels
+                          .map((m) => DropdownMenuItem(
+                                value: m.id,
+                                child: Row(
+                                  children: [
+                                    Icon(m.icon,
+                                        size: 16, color: AppColors.purpleLight),
+                                    const SizedBox(width: AppSpacing.sm),
+                                    Flexible(
+                                      child: Text('${m.label}  (${m.id})',
+                                          overflow: TextOverflow.ellipsis),
+                                    ),
+                                  ],
+                                ),
+                              ))
+                          .toList(),
                       onChanged: (value) {
                         if (value != null) {
                           setDialogState(() => deviceType = value);
                         }
                       },
                     ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Builder(builder: (_) {
+                      final m = deviceModelOf(deviceType);
+                      return Text(
+                        m == null
+                            ? ''
+                            : '支援功能：${m.featureLabel}\n'
+                                '裝置註冊時必須以同一個型號字串送出 home/register，'
+                                '否則 mqtt-server 會回「未知型號」。',
+                        style: TextStyle(
+                            color: AppColors.textDisabled,
+                            fontSize: 11,
+                            height: 1.5),
+                      );
+                    }),
                   ],
                 ),
               ),

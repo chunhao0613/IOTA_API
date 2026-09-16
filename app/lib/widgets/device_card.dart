@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../utils/device_models.dart';
 import '../utils/parsing.dart';
 
 /// 裝置卡片上可觸發的管理動作。
@@ -184,13 +185,11 @@ class DeviceCard extends StatelessWidget {
   }
 
   Widget _buildIcon() {
-    final type = asText(device['device_type'], fallback: '').toLowerCase();
-    final icon = switch (type) {
-      'smart_lock' => Icons.lock_outline,
-      'sensor' => Icons.sensors,
-      'camera' => Icons.videocam_outlined,
-      _ => Icons.router_outlined,
-    };
+    // 圖示跟著 models.yaml 的型號走（device_models.dart），不再自己列一份
+    // smart_lock / sensor / camera —— 後兩者在系統裡根本不存在。
+    // 認不得的型號（含舊資料）用通用圖示，不假裝知道那是什麼。
+    final icon = deviceModelOf(device['device_type'])?.icon ??
+        Icons.router_outlined;
 
     final color = _isRetired
         ? AppColors.textDisabled
