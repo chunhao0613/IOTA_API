@@ -85,10 +85,6 @@ class ApiConfig {
   static Uri uri(String endpoint) =>
       Uri.parse('$baseUrl/${endpoint.replaceAll(RegExp(r'^/+'), '')}');
 
-  /// 舊介面，保留給尚未改寫的呼叫端。新程式請用 [uri]。
-  @Deprecated('改用 ApiConfig.uri(ApiEndpoints.xxx)')
-  static String getUrl(String endpoint) => uri(endpoint).toString();
-
   static String get _platformDefaultBaseUrl {
     // Web：跟著網頁本身的 origin 走，開發時通常有 proxy 或同源部署。
     if (kIsWeb) {
@@ -151,6 +147,11 @@ class ApiEndpoints {
   // 控制與監控
   static const String controlDevice = 'control_device';
   static const String dashboard = 'dashboard';
+
+  /// 控制指令送出後的輪詢專用端點。**不要**改回用 [dashboard] 輪詢：
+  /// get_family_dashboard.py 每次呼叫都會寫一筆 DASHBOARD_VIEWED 進
+  /// audit_logs，輪詢會把雜湊鏈灌滿雜訊。
+  static const String getCommandStatus = 'get_command_status';
 
   // 健康檢查（設定頁的「測試連線」用）
   static const String healthz = 'healthz';

@@ -41,6 +41,16 @@ ROUTES: dict[str, tuple[str, tuple[str, ...]]] = {
     "control_device": ("control_device/control_device.py", ("POST",)),
     "device_status_update": ("control_device/device_status_update.py", ("POST",)),
     "dashboard": ("dashboard/get_family_dashboard.py", ("POST",)),
+    # 輪詢專用的輕量指令狀態查詢。App 原本拿 /dashboard 輪詢，而 dashboard
+    # 每次呼叫都會寫一筆 DASHBOARD_VIEWED 進 audit_logs —— 按一次解鎖最多會
+    # 在雜湊鏈裡塞進 15 筆假的「檢視儀表板」紀錄。這支不寫稽核日誌。
+    "get_command_status": (
+        "get_command_status/get_command_status.py",
+        ("GET", "POST"),
+    ),
+    # UC1.5 目前場域情境。腳本在 f4b12df 就 commit 了，但跟 UC1.3 / UC1.4
+    # 當初一樣沒掛進路由表，HTTP 打不到。
+    "get_family_context": ("get_family_context/get_family_context.py", ("GET", "POST")),
     # UC1.3 閘道器初始化與屋主綁定。腳本早已寫好，但一直沒掛進路由表，
     # 導致 HTTP 打不到、App 無法實作對應畫面。
     # provision_gateway_identity.py 不在此列：它是 argparse CLI 佈建工具

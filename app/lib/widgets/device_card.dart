@@ -17,6 +17,7 @@ class DeviceCard extends StatelessWidget {
     required this.device,
     required this.isAdmin,
     this.canControl = true,
+    this.myRole = '',
     this.onAction,
   });
 
@@ -24,10 +25,40 @@ class DeviceCard extends StatelessWidget {
   final bool isAdmin;
 
   /// Guest 在後端會被 `control_device` 的角色檢查擋掉（403），
-  /// 這裡先在 UI 隱藏，避免給出注定失敗的操作。
+  /// 這裡不送出注定失敗的請求，改成點擊後說明原因。
   final bool canControl;
 
+  /// 使用者在這個場域的角色，只用來在權限不足時說明原因。
+  final String myRole;
+
   final void Function(DeviceAction action)? onAction;
+
+  /// 用對話框說明為什麼不能控制。SnackBar 在卡片密集的清單裡容易被忽略。
+  void _explain(BuildContext context, String message) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.info_outline, color: AppColors.info),
+            SizedBox(width: AppSpacing.sm),
+            Expanded(child: Text('無法控制這台裝置')),
+          ],
+        ),
+        content: Text(
+          message,
+          style: TextStyle(color: AppColors.textSecondary, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了',
+                style: TextStyle(color: AppColors.indigoLight)),
+          ),
+        ],
+      ),
+    );
+  }
 
   bool get _isRetired {
     final status = asText(device['status'], fallback: '').toLowerCase();
@@ -58,9 +89,18 @@ class DeviceCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.xl),
-          onTap: (_isRetired || !canControl)
-              ? null
-              : () => onAction?.call(DeviceAction.control),
+          // 沒有控制權時仍然可以點，但改成說明為什麼不能控制。
+          // 舊版直接 onTap: null，讓「權限不足」跟「App 壞掉」在畫面上完全
+          // 一樣 —— 卡片點了毫無反應，使用者只會以為當掉了。
+          onTap: _isRetired
+              ? () => _explain(context, '這台裝置已除役，無法再進行控制或通訊。')
+              : canControl
+                  ? () => onAction?.call(DeviceAction.control)
+                  : () => _explain(
+                        context,
+                        '您在這個場域的角色是「${roleLabel(myRole)}」，沒有遠端控制權限。'
+                        '如需操作請聯絡場域管理員調整權限。',
+                      ),
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
@@ -110,17 +150,27 @@ class DeviceCard extends StatelessWidget {
                   const SizedBox(height: AppSpacing.sm),
                   _buildMaintenanceLine(),
                 ],
-                if (!_isRetired && canControl) ...[
+                if (!_isRetired) ...[
                   const SizedBox(height: AppSpacing.sm),
                   Row(
                     children: [
-                      Icon(Icons.touch_app_outlined,
-                          size: 13, color: AppColors.textDisabled),
+                      Icon(
+                        canControl
+                            ? Icons.touch_app_outlined
+                            : Icons.lock_person_outlined,
+                        size: 13,
+                        color: AppColors.textDisabled,
+                      ),
                       const SizedBox(width: AppSpacing.xs),
-                      Text(
-                        '點擊卡片進行遠端控制',
-                        style: TextStyle(
-                            color: AppColors.textDisabled, fontSize: 11),
+                      Expanded(
+                        child: Text(
+                          canControl
+                              ? '點擊卡片進行遠端控制'
+                              : '您的角色沒有控制權限（點擊查看說明）',
+                          style: TextStyle(
+                              color: AppColors.textDisabled, fontSize: 11),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),

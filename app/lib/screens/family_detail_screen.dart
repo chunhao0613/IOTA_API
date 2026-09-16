@@ -47,23 +47,30 @@ class _FamilyDetailScreenState extends State<FamilyDetailScreen>
   String? _devicesError;
   String _inviteRole = 'Guest';
 
-  bool get _isAdmin => widget.myRole.toLowerCase() == 'admin';
+  bool get _isAdmin => isFamilyAdmin(widget.myRole);
 
   /// Guest 會被 `control_device` 的角色檢查擋掉（只允許 admin/owner/member）。
-  bool get _canControl {
-    final role = widget.myRole.toLowerCase();
-    return role == 'admin' || role == 'owner' || role == 'member';
-  }
+  bool get _canControl => canControlDevices(widget.myRole);
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _isAdmin ? 3 : 2, vsync: this);
+    // build() 會讀 `_tabController.index` 決定要不要顯示「配對裝置」FAB，
+    // 但切換分頁只會通知 TabBar / TabBarView，不會重建這個 Scaffold。
+    // 少了這行，Admin 切到「設備狀態」時 FAB 不會出現，要等下拉重新整理之類
+    // 的 setState 碰巧觸發重建才會冒出來。
+    _tabController.addListener(_onTabChanged);
     _refreshAll();
+  }
+
+  void _onTabChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
     _inviteeIdController.dispose();
     super.dispose();
@@ -874,6 +881,7 @@ class _FamilyDetailScreenState extends State<FamilyDetailScreen>
             device: device,
             isAdmin: _isAdmin,
             canControl: _canControl,
+            myRole: widget.myRole,
             onAction: (action) => _handleDeviceAction(action, device),
           );
         },

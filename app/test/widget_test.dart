@@ -70,4 +70,31 @@ void main() {
     test('locked', () => expect(physicalStateLabel('LOCKED'), '已上鎖'));
     test('unlocked', () => expect(physicalStateLabel('unlocked'), '已解鎖'));
   });
+
+  // 這兩個判斷原本散在三個畫面各寫一份、規則還不一致：owner 在畫面上顯示
+  // 「管理員」也能控制裝置，卻看不到管理選單與發送邀請分頁。集中之後用測試
+  // 釘住兩者的差異 —— canControl 比 isAdmin 多包含 member。
+  group('角色權限', () {
+    test('admin 是管理員', () => expect(isFamilyAdmin('Admin'), isTrue));
+    test('owner 也是管理員（大小寫不拘）', () {
+      expect(isFamilyAdmin('owner'), isTrue);
+      expect(isFamilyAdmin('OWNER'), isTrue);
+    });
+    test('member 不是管理員但可以控制', () {
+      expect(isFamilyAdmin('Member'), isFalse);
+      expect(canControlDevices('Member'), isTrue);
+    });
+    test('guest 兩者皆否', () {
+      expect(isFamilyAdmin('Guest'), isFalse);
+      expect(canControlDevices('Guest'), isFalse);
+    });
+    test('revoked 兩者皆否', () {
+      expect(isFamilyAdmin('Revoked'), isFalse);
+      expect(canControlDevices('Revoked'), isFalse);
+    });
+    test('null / 空字串不會誤判成有權限', () {
+      expect(isFamilyAdmin(null), isFalse);
+      expect(canControlDevices(''), isFalse);
+    });
+  });
 }

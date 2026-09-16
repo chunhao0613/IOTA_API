@@ -38,6 +38,9 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
   /// 登入當下的舊快照，還以為是最新資料。
   String? _familiesError;
 
+  /// 邀請清單載入失敗時的訊息。
+  String? _invitationsError;
+
   int _activeTab = 0;
 
   String get _userId => (widget.userData['user_id'] ?? '').toString();
@@ -86,7 +89,21 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
     if (!mounted) return;
     setState(() {
       _isLoadingInvitations = false;
-      if (result.ok) _invitations = result.dataList;
+      if (result.ok) {
+        // 只留待處理的。列表上的「接受 / 拒絕」按鈕對已處理的邀請沒有意義，
+        // 而且分頁徽章本來就只算 Pending，兩邊的認定必須一致。
+        _invitations = result.dataList
+            .where((inv) =>
+                inv is Map &&
+                asText(inv['status'], fallback: 'Pending').toLowerCase() ==
+                    'pending')
+            .toList();
+        _invitationsError = null;
+      } else {
+        // 舊版失敗時完全靜音，畫面照樣顯示「目前沒有任何待確認的邀請」——
+        // 有邀請卻說沒有，比直接報錯更糟。
+        _invitationsError = result.message;
+      }
     });
   }
 
@@ -382,9 +399,8 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
       );
 
   Widget _buildTabSwitcher() {
-    final pendingCount = _invitations
-        .where((inv) => (inv['status'] ?? 'Pending') == 'Pending')
-        .length;
+    // _fetchInvitations 已經只保留 Pending，這裡不用再過濾一次。
+    final pendingCount = _invitations.length;
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -499,7 +515,10 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              '無法更新場域清單，以下為登入當時的資料。\n$_familiesError',
+              // 自動登入時 Session 不保存 families（見 session.dart），
+              // 這裡的舊資料只在「這次剛登入」才是登入快照，其餘情況是上一次
+              // 成功刷新的結果。文案不寫死成「登入當時」，避免說謊。
+              '無法更新場域清單，以下為先前成功載入的資料。\n$_familiesError',
               style: const TextStyle(color: AppColors.warning, fontSize: 12),
             ),
           ),
@@ -510,7 +529,7 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
 
   Widget _buildFamilyCard(Map<String, dynamic> fam) {
     final role = (fam['user_role'] ?? 'Guest').toString();
-    final isAdmin = role.toLowerCase() == 'admin';
+    final isAdmin = isFamilyAdmin(role);
     // 舊版用 int.parse，後端回非數字就整頁崩。
     final familyId = asInt(fam['family_id']);
     final deviceCount = asInt(fam['device_count']);
@@ -648,10 +667,15 @@ class _FamilyListScreenState extends State<FamilyListScreen> {
     }
 
     if (_invitations.isEmpty) {
-      return const EmptyState(
-        icon: Icons.mark_email_read_outlined,
-        title: '目前沒有任何待確認的邀請',
-        subtitle: '有人邀請您加入場域時，通知會出現在這裡。',
+      return EmptyState(
+        icon: _invitationsError == null
+            ? Icons.mark_email_read_outlined
+            : Icons.cloud_off_outlined,
+        title: _invitationsError == null
+            ? '目前沒有任何待確認的邀請'
+            : '無法載入邀請通知',
+        subtitle: _invitationsError ?? '有人邀請您加入場域時，通知會出現在這裡。',
+        isError: _invitationsError != null,
       );
     }
 

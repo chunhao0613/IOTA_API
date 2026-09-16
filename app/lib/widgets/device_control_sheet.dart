@@ -171,43 +171,46 @@ class _DeviceControlSheetState extends State<DeviceControlSheet> {
     });
   }
 
-  /// 重新查一次這台裝置的狀態，回傳「指令是否已經完成」。
+  /// 查一次這筆指令的執行狀態，回傳「指令是否已經完成」。
+  ///
+  /// 走 `/get_command_status` 而不是 `/dashboard`：後者每次呼叫都會寫一筆
+  /// DASHBOARD_VIEWED 進 audit_logs，用它輪詢等於每按一次解鎖就往雜湊鏈裡
+  /// 塞最多 15 筆假的稽核紀錄。詳見 API/get_command_status/。
   Future<bool> _refreshDevice() async {
-    final result = await ApiClient.post(ApiEndpoints.dashboard, {
-      'auth_type': 'user',
+    final commandId = _commandId;
+    if (commandId == null || commandId.isEmpty) return false;
+
+    final result = await ApiClient.post(ApiEndpoints.getCommandStatus, {
+      'command_id': commandId,
       'user_id': widget.currentUserId,
-      'family_id': widget.familyId,
-      'include_history': false,
     });
 
     if (!mounted || !result.ok) return false;
 
-    final devices = result.dataMap['devices'];
-    if (devices is! List) return false;
-
-    for (final entry in devices) {
-      if (entry is Map<String, dynamic> &&
-          asText(entry['device_id'], fallback: '') == _deviceId) {
-        setState(() => _device = entry);
-
-        final lastCommand = entry['last_command'];
-        if (lastCommand is Map<String, dynamic>) {
-          final sameCommand =
-              asText(lastCommand['command_id'], fallback: '') == _commandId;
-          final status =
-              asText(lastCommand['status'], fallback: '').toUpperCase();
-          // device_status_update / mqtt_topic_bridge 寫回來之後才會離開 PUBLISHED。
-          if (sameCommand &&
-              status.isNotEmpty &&
-              status != 'PUBLISHED' &&
-              status != 'ACCEPTED') {
-            return true;
-          }
-        }
-        return false;
-      }
+    final data = result.dataMap;
+    final telemetry = data['telemetry'];
+    if (telemetry is Map<String, dynamic>) {
+      // 只覆寫遙測會更新的欄位，保留 device_name / maintenance_mode 等
+      // 從外層帶進來、這支端點不回傳的資料。
+      setState(() {
+        _device = {
+          ..._device,
+          if (telemetry['physical_state'] != null)
+            'physical_state': telemetry['physical_state'],
+          if (telemetry['battery'] != null) 'battery': telemetry['battery'],
+          if (telemetry['rssi'] != null) 'rssi': telemetry['rssi'],
+        };
+      });
     }
-    return false;
+
+    final command = data['command'];
+    if (command is! Map<String, dynamic>) return false;
+
+    final status = asText(command['status'], fallback: '').toUpperCase();
+    // device_status_update / mqtt_topic_bridge 寫回來之後才會離開 PUBLISHED。
+    return status.isNotEmpty &&
+        status != 'PUBLISHED' &&
+        status != 'ACCEPTED';
   }
 
   @override

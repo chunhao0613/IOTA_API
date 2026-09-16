@@ -11,7 +11,7 @@
 | 類別 | 數量 | 影響 |
 | :-- | :-: | :-- |
 | 修改既有後端檔案 | 2 支 | `gateway.py`（新增路由 + CORS）、`list_devices.py`（修跨場域外洩） |
-| 新增後端端點 | 4 支 | App 一直在呼叫但後端不存在的 3 支 + 建立場域 |
+| 新增後端端點 | 5 支 | App 一直在呼叫但後端不存在的 3 支 + 建立場域 + 輪詢用的 `get_command_status`（見第二節） |
 | 新增開發環境設定 | 2 份 | 本機開發用，**沒有**覆蓋任何既有設定或憑證 |
 | 刪除既有檔案 | 0 | 無 |
 
@@ -26,7 +26,7 @@
 
 原負責範圍：API 閘道（見 `API/WHITEPAPER.md` 第 2 節）。
 
-**變更 A — 新增 10 條路由**
+**變更 A — 新增 12 條路由**
 
 ```
 + create_family                    （新增端點，見第二節）
@@ -39,7 +39,13 @@
 + confirm_gateway_trust            （UC1.4，腳本早已存在）
 + list_gateway_trusts              （UC1.4，腳本早已存在）
 + revoke_gateway_trust             （UC1.4，腳本早已存在）
++ get_command_status               （新增端點，見第二節）
++ get_family_context               （UC1.5，腳本早已存在）
 ```
+
+`get_family_context` 跟 UC1.3 / UC1.4 是同一種情況：腳本在 `f4b12df Add
+get_family_context API endpoint` 就 commit 了，但沒有掛進 `ROUTES`，所以
+HTTP 一直打不到。程式碼沒有動，只補路由。
 
 後六條要特別說明：**UC1.3 / UC1.4 的腳本已經寫好並 commit 了
 （`dc60a77 feat: 完成 UC1.3 閘道器初始化與 UC1.4 跨場域信任功能`），
@@ -101,6 +107,12 @@ ORDER BY timestamp DESC LIMIT 20
 | `POST/GET /get_family_members` | `API/get_family_members/get_family_members.py` | 「成員清單」分頁完全載不到資料，連帶 `update_member_role` 沒有入口 |
 | `POST/GET /get_invitations` | `API/get_invitations/get_invitations.py` | 「邀請通知」永遠是空的 —— `send_invitation` 送得出去、受邀者卻看不到，`respond_invitation` 等於沒有入口 |
 | `POST /create_family` | `API/create_family/create_family.py` | **原本沒有任何建立家庭的 API**（WHITEPAPER 第 11 節記載此缺口，測試靠手動 `INSERT INTO families`）。新使用者註冊完是死路，除非有人邀請 |
+| `POST/GET /get_command_status` | `API/get_command_status/get_command_status.py` | **稽核鏈污染**。App 送出控制指令後要輪詢結果（MQTT 模式只回 `PUBLISHED`），原本拿 `/dashboard` 輪詢，而 `get_family_dashboard.py` 每次呼叫都寫一筆 `DASHBOARD_VIEWED` 進 `audit_logs` —— 每 2 秒一次、最多 15 次，於是**按一次解鎖會在雜湊鏈裡留下多達 15 筆假的「檢視儀表板」紀錄**。本專題的核心賣點是不可篡改的稽核鏈，鏈上絕大多數卻是 App 輪詢雜訊。這支只查一筆 `control_commands` + 該裝置最新一筆 `device_telemetry`，**不寫任何稽核日誌**，並檢查呼叫者是該場域的有效成員 |
+
+> **既有 `audit_logs` 需要清理**：在改用 `get_command_status` 之前產生的
+> `DASHBOARD_VIEWED` 雜訊已經寫進鏈裡了。雜湊鏈不能直接刪列（刪了後續
+> `prev_hash` 全部對不上），Demo 前若要一條乾淨的鏈，建議重建測試資料庫
+> 而不是手動 DELETE。
 
 ### 設計決策（請 review）
 

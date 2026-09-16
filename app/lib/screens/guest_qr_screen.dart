@@ -254,8 +254,18 @@ class _GuestQrScreenState extends State<GuestQrScreen> {
       const SizedBox(height: AppSpacing.lg),
       _credentialRow('訪客帳號', guestUid),
       _credentialRow('訪客密碼', password),
-      _credentialRow('有效期限', formatDisplay(_endTime)),
-      _credentialRow('可使用次數', _maxUsesController.text),
+      // 以後端實際核發的值為準，後端沒回才退回本機送出的值。
+      // 舊版直接顯示 `_endTime` 與輸入框文字，後端若有夾限（例如上限 24 小時）
+      // 畫面會顯示一個根本沒生效的期限，訪客到時候才發現進不去。
+      _credentialRow(
+        '有效期限',
+        formatDisplay(data['end_time'] ?? data['expires_at'],
+            fallback: formatDisplay(_endTime)),
+      ),
+      _credentialRow(
+        '可使用次數',
+        asText(data['max_uses'], fallback: _maxUsesController.text),
+      ),
       const SizedBox(height: AppSpacing.lg),
       OutlinedButton.icon(
         onPressed: () => setState(() => _result = null),

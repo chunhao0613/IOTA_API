@@ -40,10 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? _error;
   bool _includeHistory = true;
 
-  bool get _canControl {
-    final role = widget.myRole.toLowerCase();
-    return role == 'admin' || role == 'owner' || role == 'member';
-  }
+  bool get _canControl => canControlDevices(widget.myRole);
 
   @override
   void initState() {
@@ -221,8 +218,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         borderRadius: BorderRadius.circular(AppRadius.xl),
         border: Border.all(color: AppColors.border),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+      // 五格用 Row + spaceAround，數字一破三位數（裝置總數 100）在窄螢幕就
+      // overflow。改成 Wrap，空間不夠時自動換行而不是畫出黃黑斜紋。
+      child: Wrap(
+        alignment: WrapAlignment.spaceAround,
+        spacing: AppSpacing.md,
+        runSpacing: AppSpacing.md,
         children: [
           for (final (label, value, color, icon) in tiles)
             Column(
@@ -263,6 +264,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // 儀表板不提供管理選單，維持單一職責：管理動作都在家庭詳情頁。
           isAdmin: false,
           canControl: _canControl,
+          myRole: widget.myRole,
           onAction: (action) {
             if (action == DeviceAction.control) _openControlSheet(device);
           },

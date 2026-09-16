@@ -51,6 +51,25 @@ String initialOf(String? name, {String fallback = '?'}) {
   return trimmed.substring(0, 1).toUpperCase();
 }
 
+/// 角色權限判斷的單一來源。
+///
+/// 原本三個畫面各寫一份：`family_detail` 的 `_isAdmin` 與 `family_list` 的
+/// `isAdmin` 只認 `admin`，但 `_canControl` 與 [roleLabel] 都把 `owner` 當
+/// 管理員。結果 `owner` 在畫面上顯示「管理員」、也能控制裝置，卻看不到管理
+/// 選單、發送邀請分頁與訪客 QR —— 同一個角色在不同畫面有不同權限。
+///
+/// 兩個判斷都集中在這裡，未來後端新增角色只要改這一處。
+bool isFamilyAdmin(dynamic role) {
+  final text = asText(role, fallback: '').toLowerCase();
+  return text == 'admin' || text == 'owner';
+}
+
+/// 能否下發控制指令。對應 `control_device.py` 的角色檢查（Guest 會被擋掉）。
+bool canControlDevices(dynamic role) {
+  final text = asText(role, fallback: '').toLowerCase();
+  return text == 'admin' || text == 'owner' || text == 'member';
+}
+
 /// 角色代碼 → 顯示名稱。
 ///
 /// 後端的角色是 `Admin` / `Member` / `Guest` / `Technician` / `SP` / `Revoked`，
